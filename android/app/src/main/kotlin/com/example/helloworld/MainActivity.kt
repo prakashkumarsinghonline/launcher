@@ -50,6 +50,11 @@ class MainActivity: FlutterActivity() {
                     startActivity(intent)
                     result.success(true)
                 }
+                "isNotificationAccessGranted" -> {
+                    val enabledListeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+                    val isGranted = enabledListeners?.contains(packageName) == true
+                    result.success(isGranted)
+                }
                 "disableApp" -> {
                     val packageName = call.argument<String>("packageName")
                     if (packageName != null) {

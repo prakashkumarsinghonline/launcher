@@ -3,6 +3,11 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:math' as math;
+import 'package:record/record.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:io';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,15 +95,26 @@ class _LauncherScreenState extends State<LauncherScreen> {
   
   // Customization State
   int _wallpaperIndex = 0;
-  String _clockStyle = 'Bold';
-  String _fontStyle = 'Courier';
+  String _clockStyle = 'Bold'; // Bold, Thin, Outline, Stacked, Analog
+  int _clockColorIndex = 0;
+  String _fontStyle = 'Courier'; // Courier, Roboto, Arial, Times New Roman, monospace, sans-serif, serif, cursive
   String _iconShape = 'Original'; // Original, Circle, Squircle
+  String _notificationStyle = 'Toast'; // Toast, Minimal, Card
 
   String _timeString = "";
   String _dateString = "";
+  DateTime _currentDate = DateTime.now();
   Timer? _timer;
   final TextEditingController _searchController = TextEditingController();
   StreamSubscription? _notificationSubscription;
+  bool _hasNotificationAccess = true;
+
+  // Recorder State
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  bool _isRecording = false;
+  String _recordTime = "00:00";
+  Timer? _recordTimer;
+  int _recordSeconds = 0;
 
   final List<Color> _wallpapers = [
     Colors.transparent,
@@ -107,6 +123,17 @@ class _LauncherScreenState extends State<LauncherScreen> {
     const Color(0xFF87CEFA), // Light Blue
     const Color(0xFF98FB98), // Sky Blue
     const Color(0xFFE6E6FA), // Pale Green
+  ];
+
+  final List<Color> _clockColors = [
+    const Color(0xFFCCFF00), // Neon Lime
+    Colors.blueAccent,
+    Colors.redAccent,
+    Colors.purpleAccent,
+    Colors.cyanAccent,
+    Colors.orangeAccent,
+    Colors.white,
+    Colors.black,
   ];
 
   @override
@@ -120,7 +147,19 @@ class _LauncherScreenState extends State<LauncherScreen> {
       _filterApps(_searchController.text);
     });
 
+    _checkNotificationAccess();
     _initNotifications();
+  }
+
+  Future<void> _checkNotificationAccess() async {
+    try {
+      final bool granted = await platform.invokeMethod('isNotificationAccessGranted');
+      setState(() {
+        _hasNotificationAccess = granted;
+      });
+    } catch (e) {
+      debugPrint("Failed to check notification access: $e");
+    }
   }
 
   void _initNotifications() {
@@ -128,8 +167,6 @@ class _LauncherScreenState extends State<LauncherScreen> {
       final data = Map<String, dynamic>.from(event);
       _showCustomNotification(data['title'] ?? 'Notification', data['text'] ?? '', data['packageName'] ?? '');
     });
-    // Request permission on first launch (ideally should be a button in settings, doing it silently for now)
-    platform.invokeMethod('requestNotificationAccess').catchError((e) {});
   }
 
   void _showCustomNotification(String title, String text, String packageName) {
@@ -143,64 +180,114 @@ class _LauncherScreenState extends State<LauncherScreen> {
     final overlay = Overlay.of(context);
     late OverlayEntry overlayEntry;
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    Widget notificationContent;
+
+    if (_notificationStyle == 'Minimal') {
+      notificationContent = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF111111) : Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (app != null) ...[
+              ClipOval(child: Image.memory(app.icon, width: 24, height: 24)),
+              const SizedBox(width: 12),
+            ],
+            Flexible(
+              child: Text(
+                title.isNotEmpty ? "$title: $text" : text,
+                style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_notificationStyle == 'Card') {
+      notificationContent = Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border(left: BorderSide(color: _clockColors[_clockColorIndex], width: 4)),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 15, offset: const Offset(0, 8))],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (app != null) ...[
+                  Image.memory(app.icon, width: 20, height: 20),
+                  const SizedBox(width: 8),
+                ],
+                Text(app?.originalName ?? 'System', style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: isDark ? Colors.white : Colors.black)),
+            const SizedBox(height: 4),
+            Text(text, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+          ],
+        ),
+      );
+    } else {
+      // Toast (Default)
+      notificationContent = Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF222222) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 10))],
+          border: Border.all(color: _clockColors[_clockColorIndex], width: 2)
+        ),
+        child: Row(
+          children: [
+            if (app != null)
+              ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.memory(app.icon, width: 40, height: 40)),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black)),
+                  Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     overlayEntry = OverlayEntry(
       builder: (context) => Positioned(
         top: 50.0,
-        left: 20.0,
-        right: 20.0,
-        child: Material(
-          color: Colors.transparent,
-          child: TweenAnimationBuilder(
-            tween: Tween<double>(begin: 0.0, end: 1.0),
-            duration: const Duration(milliseconds: 400),
-            curve: Curves.elasticOut,
-            builder: (context, value, child) {
-              return Transform.translate(
-                offset: Offset(0, -50 * (1 - value)),
-                child: Opacity(
-                  opacity: value,
-                  child: child,
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).brightness == Brightness.dark 
-                    ? const Color(0xFF222222) 
-                    : Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  )
-                ],
-                border: Border.all(
-                  color: const Color(0xFFCCFF00),
-                  width: 2,
-                )
-              ),
-              child: Row(
-                children: [
-                  if (app != null)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: Image.memory(app.icon, width: 40, height: 40),
-                    ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        Text(text, maxLines: 2, overflow: TextOverflow.ellipsis),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+        left: _notificationStyle == 'Minimal' ? null : 20.0,
+        right: _notificationStyle == 'Minimal' ? null : 20.0,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Material(
+            color: Colors.transparent,
+            child: TweenAnimationBuilder(
+              tween: Tween<double>(begin: 0.0, end: 1.0),
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.elasticOut,
+              builder: (context, value, child) {
+                return Transform.translate(
+                  offset: Offset(0, -50 * (1 - value)),
+                  child: Opacity(opacity: value, child: child),
+                );
+              },
+              child: notificationContent,
             ),
           ),
         ),
@@ -216,8 +303,10 @@ class _LauncherScreenState extends State<LauncherScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _recordTimer?.cancel();
     _searchController.dispose();
     _notificationSubscription?.cancel();
+    _audioRecorder.dispose();
     super.dispose();
   }
   
@@ -228,8 +317,10 @@ class _LauncherScreenState extends State<LauncherScreen> {
       _hiddenApps = prefs.getStringList('hiddenApps') ?? [];
       _wallpaperIndex = prefs.getInt('wallpaperIndex') ?? 0;
       _clockStyle = prefs.getString('clockStyle') ?? 'Bold';
+      _clockColorIndex = prefs.getInt('clockColorIndex') ?? 0;
       _fontStyle = prefs.getString('fontStyle') ?? 'Courier';
       _iconShape = prefs.getString('iconShape') ?? 'Original';
+      _notificationStyle = prefs.getString('notificationStyle') ?? 'Toast';
       
       String? renamedJson = prefs.getString('renamedApps');
       if (renamedJson != null) {
@@ -246,14 +337,17 @@ class _LauncherScreenState extends State<LauncherScreen> {
     await prefs.setStringList('hiddenApps', _hiddenApps);
     await prefs.setInt('wallpaperIndex', _wallpaperIndex);
     await prefs.setString('clockStyle', _clockStyle);
+    await prefs.setInt('clockColorIndex', _clockColorIndex);
     await prefs.setString('fontStyle', _fontStyle);
     await prefs.setString('iconShape', _iconShape);
+    await prefs.setString('notificationStyle', _notificationStyle);
     await prefs.setString('renamedApps', json.encode(_renamedApps));
   }
 
   void _updateTime() {
     final now = DateTime.now();
     setState(() {
+      _currentDate = now;
       _timeString = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
       _dateString = "${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}";
     });
@@ -319,24 +413,54 @@ class _LauncherScreenState extends State<LauncherScreen> {
     }
   }
 
-  Future<void> _disableApp(String packageName) async {
+  Future<void> _disableAppSilently(String packageName) async {
     try {
       await platform.invokeMethod('disableApp', {'packageName': packageName});
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("App disabled system-wide!"), backgroundColor: Colors.green),
-        );
-      }
-    } on PlatformException catch (e) {
+    } catch (e) {
+      // Silently catch error, we will just hide it in our launcher UI.
+      debugPrint("Silent hide: System disable not allowed.");
+    }
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      await _audioRecorder.stop();
+      _recordTimer?.cancel();
+      setState(() {
+        _isRecording = false;
+        _recordSeconds = 0;
+        _recordTime = "00:00";
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Cannot disable via Play Store without Root/Device Admin. Hiding it locally instead. (${e.message})"),
-            backgroundColor: Colors.redAccent,
-            duration: const Duration(seconds: 4),
+            content: const Text("Recording saved to Documents!"),
+            backgroundColor: _clockColors[_clockColorIndex],
+            duration: const Duration(seconds: 2),
           ),
         );
       }
+    } else {
+      var status = await Permission.microphone.request();
+      if (status != PermissionStatus.granted) return;
+
+      Directory dir = await getApplicationDocumentsDirectory();
+      String path = '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      await _audioRecorder.start(const RecordConfig(), path: path);
+      setState(() {
+        _isRecording = true;
+        _recordSeconds = 0;
+        _recordTime = "00:00";
+      });
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+        setState(() {
+          _recordSeconds++;
+          final minutes = (_recordSeconds / 60).floor().toString().padLeft(2, '0');
+          final seconds = (_recordSeconds % 60).toString().padLeft(2, '0');
+          _recordTime = "$minutes:$seconds";
+        });
+      });
     }
   }
   
@@ -383,7 +507,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
                     if (isHidden) _hiddenApps.remove(app.packageName);
                     else {
                       _hiddenApps.add(app.packageName);
-                      _disableApp(app.packageName); // Attempt system-wide disable
+                      _disableAppSilently(app.packageName); 
                     }
                     _savePreferences();
                     _filterApps(_searchController.text);
@@ -418,103 +542,151 @@ class _LauncherScreenState extends State<LauncherScreen> {
           builder: (BuildContext context, StateSetter setModalState) {
             return Padding(
               padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("CUSTOMIZATION", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-                  const SizedBox(height: 20),
-                  
-                  Text("Wallpaper", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 50,
-                    child: ListView.builder(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: _wallpapers.length,
-                      itemBuilder: (context, index) {
-                        return GestureDetector(
-                          onTap: () {
-                            setModalState(() => _wallpaperIndex = index);
-                            setState(() {
-                              _wallpaperIndex = index;
-                              _savePreferences();
-                            });
-                          },
-                          child: Container(
-                            width: 50,
-                            margin: const EdgeInsets.only(right: 10),
-                            decoration: BoxDecoration(
-                              color: _wallpapers[index] == Colors.transparent ? (isDark ? Colors.black : Colors.white) : _wallpapers[index],
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: _wallpaperIndex == index ? Colors.blueAccent : Colors.grey,
-                                width: _wallpaperIndex == index ? 3 : 1,
-                              )
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("CUSTOMIZATION", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    const SizedBox(height: 20),
+                    
+                    Text("Wallpaper", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 50,
+                      child: ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _wallpapers.length,
+                        itemBuilder: (context, index) {
+                          return GestureDetector(
+                            onTap: () {
+                              setModalState(() => _wallpaperIndex = index);
+                              setState(() { _wallpaperIndex = index; _savePreferences(); });
+                            },
+                            child: Container(
+                              width: 50,
+                              margin: const EdgeInsets.only(right: 10),
+                              decoration: BoxDecoration(
+                                color: _wallpapers[index] == Colors.transparent ? (isDark ? Colors.black : Colors.white) : _wallpapers[index],
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: _wallpaperIndex == index ? Colors.blueAccent : Colors.grey,
+                                  width: _wallpaperIndex == index ? 3 : 1,
+                                )
+                              ),
+                              child: _wallpapers[index] == Colors.transparent ? const Icon(Icons.block, color: Colors.grey) : null,
                             ),
-                            child: _wallpapers[index] == Colors.transparent ? const Icon(Icons.block, color: Colors.grey) : null,
-                          ),
-                        );
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    Text("Clock Style", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    DropdownButton<String>(
+                      value: _clockStyle,
+                      isExpanded: true,
+                      dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+                      style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                      items: ['Bold', 'Thin', 'Outline', 'Stacked', 'Analog'].map((String value) {
+                        return DropdownMenuItem<String>(value: value, child: Text(value));
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setModalState(() => _clockStyle = val);
+                          setState(() { _clockStyle = val; _savePreferences(); });
+                        }
                       },
                     ),
-                  ),
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 20),
 
-                  Text("Clock Style", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-                  DropdownButton<String>(
-                    value: _clockStyle,
-                    isExpanded: true,
-                    dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
-                    style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                    items: ['Bold', 'Thin', 'Outline'].map((String value) {
-                      return DropdownMenuItem<String>(value: value, child: Text(value));
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setModalState(() => _clockStyle = val);
-                        setState(() { _clockStyle = val; _savePreferences(); });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 20),
+                    Text("Clock Color", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 40,
+                      child: ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _clockColors.length,
+                        itemBuilder: (context, index) {
+                          return GestureDetector(
+                            onTap: () {
+                              setModalState(() => _clockColorIndex = index);
+                              setState(() { _clockColorIndex = index; _savePreferences(); });
+                            },
+                            child: Container(
+                              width: 40,
+                              margin: const EdgeInsets.only(right: 10),
+                              decoration: BoxDecoration(
+                                color: _clockColors[index],
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: _clockColorIndex == index ? (isDark ? Colors.white : Colors.black) : Colors.transparent,
+                                  width: 3,
+                                )
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 20),
 
-                  Text("Font Style", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-                  DropdownButton<String>(
-                    value: _fontStyle,
-                    isExpanded: true,
-                    dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
-                    style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                    items: ['Courier', 'Roboto', 'Arial', 'Times New Roman'].map((String value) {
-                      return DropdownMenuItem<String>(value: value, child: Text(value));
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setModalState(() => _fontStyle = val);
-                        setState(() { _fontStyle = val; _savePreferences(); });
-                        FoneHomeApp.of(this.context)?.updateFont(val);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 20),
+                    Text("Font Style", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    DropdownButton<String>(
+                      value: _fontStyle,
+                      isExpanded: true,
+                      dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+                      style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                      items: ['Courier', 'Roboto', 'Arial', 'Times New Roman', 'monospace', 'sans-serif', 'serif', 'cursive'].map((String value) {
+                        return DropdownMenuItem<String>(value: value, child: Text(value));
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setModalState(() => _fontStyle = val);
+                          setState(() { _fontStyle = val; _savePreferences(); });
+                          FoneHomeApp.of(this.context)?.updateFont(val);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 20),
 
-                  Text("Icon Shape", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
-                  DropdownButton<String>(
-                    value: _iconShape,
-                    isExpanded: true,
-                    dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
-                    style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                    items: ['Original', 'Circle', 'Squircle'].map((String value) {
-                      return DropdownMenuItem<String>(value: value, child: Text(value));
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setModalState(() => _iconShape = val);
-                        setState(() { _iconShape = val; _savePreferences(); });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                ],
+                    Text("Icon Shape", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    DropdownButton<String>(
+                      value: _iconShape,
+                      isExpanded: true,
+                      dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+                      style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                      items: ['Original', 'Circle', 'Squircle'].map((String value) {
+                        return DropdownMenuItem<String>(value: value, child: Text(value));
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setModalState(() => _iconShape = val);
+                          setState(() { _iconShape = val; _savePreferences(); });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 20),
+
+                    Text("Notification Style", style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black)),
+                    DropdownButton<String>(
+                      value: _notificationStyle,
+                      isExpanded: true,
+                      dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+                      style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                      items: ['Toast', 'Minimal', 'Card'].map((String value) {
+                        return DropdownMenuItem<String>(value: value, child: Text(value));
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setModalState(() => _notificationStyle = val);
+                          setState(() { _notificationStyle = val; _savePreferences(); });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
             );
           }
@@ -569,10 +741,42 @@ class _LauncherScreenState extends State<LauncherScreen> {
     );
   }
 
+  Widget _buildAnalogClock(Color clockColor) {
+    return Container(
+      width: 150,
+      height: 150,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: clockColor, width: 4),
+      ),
+      child: CustomPaint(
+        painter: AnalogClockPainter(
+          datetime: _currentDate,
+          color: clockColor,
+        ),
+      ),
+    );
+  }
+
   Widget _buildClock() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    Color clockColor = isDark ? const Color(0xFFCCFF00) : Colors.blueAccent;
+    Color clockColor = _clockColors[_clockColorIndex];
     
+    if (_clockStyle == 'Analog') {
+      return _buildAnalogClock(clockColor);
+    }
+
+    if (_clockStyle == 'Stacked') {
+      final hour = _currentDate.hour.toString().padLeft(2, '0');
+      final minute = _currentDate.minute.toString().padLeft(2, '0');
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(hour, style: TextStyle(fontSize: 80, height: 0.9, letterSpacing: -2, fontWeight: FontWeight.w900, color: clockColor)),
+          Text(minute, style: TextStyle(fontSize: 80, height: 0.9, letterSpacing: -2, fontWeight: FontWeight.w900, color: clockColor.withOpacity(0.5))),
+        ],
+      );
+    }
+
     TextStyle baseStyle = TextStyle(
       fontSize: 80,
       height: 1.0,
@@ -632,38 +836,100 @@ class _LauncherScreenState extends State<LauncherScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Header / Clock
-              GestureDetector(
-                onLongPress: () {
-                  setState(() {
-                    _showHidden = !_showHidden;
-                    _filterApps(_searchController.text);
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(_showHidden ? "GHOST MODE: ON 👻 (Showing Hidden)" : "GHOST MODE: OFF"),
-                      backgroundColor: _showHidden ? Colors.blueAccent : (isDark ? Colors.black : Colors.white),
-                      duration: const Duration(seconds: 2),
-                    )
-                  );
-                },
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 40, 20, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildClock(),
-                      const SizedBox(height: 8),
-                      Text(
-                        _dateString,
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white : Colors.black87,
+              // Permission Banner
+              if (!_hasNotificationAccess)
+                GestureDetector(
+                  onTap: () {
+                    platform.invokeMethod('requestNotificationAccess');
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.redAccent,
+                    child: const Text(
+                      "⚠️ Tap to enable Notification Access for custom notifications",
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+
+              // Header Row (Clock + Recorder)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 40, 20, 20),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onLongPress: () {
+                          setState(() {
+                            _showHidden = !_showHidden;
+                            _filterApps(_searchController.text);
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(_showHidden ? "GHOST MODE: ON 👻 (Showing Hidden)" : "GHOST MODE: OFF"),
+                              backgroundColor: _showHidden ? _clockColors[_clockColorIndex] : (isDark ? Colors.black : Colors.white),
+                              duration: const Duration(seconds: 2),
+                            )
+                          );
+                        },
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildClock(),
+                            const SizedBox(height: 8),
+                            Text(
+                              _dateString,
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    
+                    // Nothing-style Universal Recorder Widget
+                    GestureDetector(
+                      onTap: _toggleRecording,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: _isRecording ? Colors.redAccent.withOpacity(0.2) : (isDark ? const Color(0xFF1A1A1A) : Colors.white),
+                          borderRadius: BorderRadius.circular(30),
+                          border: Border.all(color: _isRecording ? Colors.redAccent : Colors.transparent),
+                          boxShadow: [
+                            if (!isDark && !_isRecording)
+                              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
+                          ]
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: _isRecording ? Colors.redAccent : Colors.grey,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            if (_isRecording) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                _recordTime,
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent),
+                              )
+                            ]
+                          ],
+                        ),
+                      ),
+                    )
+                  ],
                 ),
               ),
               
@@ -746,7 +1012,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
                                     ),
                                   ),
                                   if (isPinned)
-                                    Icon(Icons.push_pin, color: isDark ? const Color(0xFFCCFF00) : Colors.blueAccent, size: 20),
+                                    Icon(Icons.push_pin, color: _clockColors[_clockColorIndex], size: 20),
                                 ],
                               ),
                             ),
@@ -760,4 +1026,65 @@ class _LauncherScreenState extends State<LauncherScreen> {
       ),
     );
   }
+}
+
+class AnalogClockPainter extends CustomPainter {
+  final DateTime datetime;
+  final Color color;
+
+  AnalogClockPainter({required this.datetime, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    final hourPaint = Paint()
+      ..color = color
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+
+    final minutePaint = Paint()
+      ..color = color.withOpacity(0.8)
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round;
+
+    final secondPaint = Paint()
+      ..color = Colors.redAccent
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+
+    // Draw Hands
+    final hourHandLength = radius * 0.5;
+    final minuteHandLength = radius * 0.7;
+    final secondHandLength = radius * 0.8;
+
+    final hourAngle = (datetime.hour % 12 + datetime.minute / 60) * 30 * math.pi / 180;
+    final minuteAngle = (datetime.minute + datetime.second / 60) * 6 * math.pi / 180;
+    final secondAngle = datetime.second * 6 * math.pi / 180;
+
+    canvas.drawLine(
+      center,
+      Offset(center.dx + hourHandLength * math.sin(hourAngle), center.dy - hourHandLength * math.cos(hourAngle)),
+      hourPaint,
+    );
+
+    canvas.drawLine(
+      center,
+      Offset(center.dx + minuteHandLength * math.sin(minuteAngle), center.dy - minuteHandLength * math.cos(minuteAngle)),
+      minutePaint,
+    );
+
+    canvas.drawLine(
+      center,
+      Offset(center.dx + secondHandLength * math.sin(secondAngle), center.dy - secondHandLength * math.cos(secondAngle)),
+      secondPaint,
+    );
+
+    // Center Dot
+    canvas.drawCircle(center, 6, hourPaint);
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => true;
 }
