@@ -156,24 +156,24 @@ class _LauncherScreenState extends State<LauncherScreen> {
               child: TextField(
                 controller: _searchController,
                 style: const TextStyle(
-                  color: Colors.black,
+                  color: Colors.white,
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
                 decoration: const InputDecoration(
                   hintText: 'SEARCH APPS...',
                   hintStyle: TextStyle(
-                    color: Colors.black54,
+                    color: Colors.white54,
                     fontWeight: FontWeight.bold,
                   ),
                   filled: true,
-                  fillColor: Color(0xFFFF00FF), // Magenta
+                  fillColor: Color(0xFF1A1A1A), // Dark Neutral Grey
                   border: InputBorder.none, // NO BORDERS SHIT
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
                   contentPadding: EdgeInsets.all(20),
                 ),
-                cursorColor: Colors.black,
+                cursorColor: Colors.white,
               ),
             ),
             
