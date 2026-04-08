@@ -1,19 +1,27 @@
 package com.example.helloworld
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Build
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.fonehome.launcher/apps"
+    private val EVENT_CHANNEL = "com.fonehome.launcher/notifications"
+    private var notificationReceiver: BroadcastReceiver? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -37,11 +45,71 @@ class MainActivity: FlutterActivity() {
                         result.error("INVALID_ARGUMENT", "Package name is null", null)
                     }
                 }
+                "requestNotificationAccess" -> {
+                    val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                    startActivity(intent)
+                    result.success(true)
+                }
+                "disableApp" -> {
+                    val packageName = call.argument<String>("packageName")
+                    if (packageName != null) {
+                        try {
+                            packageManager.setApplicationEnabledSetting(
+                                packageName,
+                                PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+                                0
+                            )
+                            result.success(true)
+                        } catch (e: SecurityException) {
+                            result.error("SECURITY_EXCEPTION", "Cannot disable app without root or device admin privileges.", e.message)
+                        } catch (e: Exception) {
+                            result.error("ERROR", "Failed to disable app.", e.message)
+                        }
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Package name is null", null)
+                    }
+                }
                 else -> {
                     result.notImplemented()
                 }
             }
         }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    notificationReceiver = object : BroadcastReceiver() {
+                        override fun onReceive(context: Context?, intent: Intent?) {
+                            if (intent?.action == "com.fonehome.NOTIFICATION_EVENT") {
+                                val packageName = intent.getStringExtra("packageName")
+                                val title = intent.getStringExtra("title")
+                                val text = intent.getStringExtra("text")
+                                
+                                val notificationData = mapOf(
+                                    "packageName" to packageName,
+                                    "title" to title,
+                                    "text" to text
+                                )
+                                events?.success(notificationData)
+                            }
+                        }
+                    }
+                    val filter = IntentFilter("com.fonehome.NOTIFICATION_EVENT")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        registerReceiver(notificationReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                    } else {
+                        registerReceiver(notificationReceiver, filter)
+                    }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    notificationReceiver?.let {
+                        unregisterReceiver(it)
+                        notificationReceiver = null
+                    }
+                }
+            }
+        )
     }
 
     private fun getBitmapFromDrawable(drawable: Drawable): Bitmap {
