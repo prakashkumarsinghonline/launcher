@@ -12,6 +12,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.provider.Settings
+import android.media.MediaRecorder
+import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -22,6 +24,10 @@ class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.fonehome.launcher/apps"
     private val EVENT_CHANNEL = "com.fonehome.launcher/notifications"
     private var notificationReceiver: BroadcastReceiver? = null
+    
+    private var mediaRecorder: MediaRecorder? = null
+    private var isRecording = false
+    private var currentRecordingPath: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -73,6 +79,22 @@ class MainActivity: FlutterActivity() {
                     } else {
                         result.error("INVALID_ARGUMENT", "Package name is null", null)
                     }
+                }
+                "startRecording" -> {
+                    val path = call.argument<String>("path")
+                    if (path != null) {
+                        val success = startRecording(path)
+                        result.success(success)
+                    } else {
+                        result.error("INVALID_ARGUMENT", "Path is null", null)
+                    }
+                }
+                "stopRecording" -> {
+                    val path = stopRecording()
+                    result.success(path)
+                }
+                "isRecording" -> {
+                    result.success(isRecording)
                 }
                 else -> {
                     result.notImplemented()
@@ -176,6 +198,61 @@ class MainActivity: FlutterActivity() {
             }
         } catch (e: Exception) {
             false
+        }
+    }
+
+    private fun startRecording(path: String): Boolean {
+        if (isRecording) return false
+        
+        return try {
+            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(this)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            
+            mediaRecorder?.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(path)
+                prepare()
+                start()
+            }
+            isRecording = true
+            currentRecordingPath = path
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            mediaRecorder?.release()
+            mediaRecorder = null
+            isRecording = false
+            currentRecordingPath = null
+            false
+        }
+    }
+
+    private fun stopRecording(): String? {
+        if (!isRecording) return null
+        
+        return try {
+            mediaRecorder?.apply {
+                stop()
+                release()
+            }
+            mediaRecorder = null
+            isRecording = false
+            val path = currentRecordingPath
+            currentRecordingPath = null
+            path
+        } catch (e: Exception) {
+            e.printStackTrace()
+            mediaRecorder?.release()
+            mediaRecorder = null
+            isRecording = false
+            currentRecordingPath = null
+            null
         }
     }
 }

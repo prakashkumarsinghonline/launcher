@@ -11,7 +11,6 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.2.3
-  record: 5.0.5 # Lock version to prevent Linux build errors on newer platform interface
   permission_handler: ^11.3.1
   path_provider: ^2.1.2
 
@@ -19,12 +18,6 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-
-dependency_overrides:
-  record_platform_interface: 1.0.2
-  record_linux: 0.5.0
-  record_windows: 0.5.0
-  record_macos: 0.5.0
 
 flutter:
   uses-material-design: true

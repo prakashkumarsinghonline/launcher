@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
-import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
@@ -112,7 +111,6 @@ class _LauncherScreenState extends State<LauncherScreen> {
   bool _hasNotificationAccess = true;
 
   // Recorder State
-  final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
   String _recordTime = "00:00";
   Timer? _recordTimer;
@@ -308,7 +306,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
     _recordTimer?.cancel();
     _searchController.dispose();
     _notificationSubscription?.cancel();
-    _audioRecorder.dispose();
+    if (_isRecording) platform.invokeMethod('stopRecording');
     super.dispose();
   }
   
@@ -430,7 +428,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
 
   Future<void> _toggleRecording() async {
     if (_isRecording) {
-      await _audioRecorder.stop();
+      final String? path = await platform.invokeMethod('stopRecording');
       _recordTimer?.cancel();
       setState(() {
         _isRecording = false;
@@ -440,7 +438,7 @@ class _LauncherScreenState extends State<LauncherScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text("Recording saved to Documents!"),
+            content: Text(path != null ? "Recording saved to Documents!" : "Recording failed to save"),
             backgroundColor: _clockColors[_clockColorIndex],
             duration: const Duration(seconds: 2),
           ),
@@ -453,20 +451,28 @@ class _LauncherScreenState extends State<LauncherScreen> {
       Directory dir = await getApplicationDocumentsDirectory();
       String path = '${dir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
 
-      await _audioRecorder.start(const RecordConfig(), path: path);
-      setState(() {
-        _isRecording = true;
-        _recordSeconds = 0;
-        _recordTime = "00:00";
-      });
-      _recordTimer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+      final bool success = await platform.invokeMethod('startRecording', {'path': path});
+      if (success) {
         setState(() {
-          _recordSeconds++;
-          final minutes = (_recordSeconds / 60).floor().toString().padLeft(2, '0');
-          final seconds = (_recordSeconds % 60).toString().padLeft(2, '0');
-          _recordTime = "$minutes:$seconds";
+          _isRecording = true;
+          _recordSeconds = 0;
+          _recordTime = "00:00";
         });
-      });
+        _recordTimer = Timer.periodic(const Duration(seconds: 1), (Timer t) {
+          setState(() {
+            _recordSeconds++;
+            final minutes = (_recordSeconds / 60).floor().toString().padLeft(2, '0');
+            final seconds = (_recordSeconds % 60).toString().padLeft(2, '0');
+            _recordTime = "$minutes:$seconds";
+          });
+        });
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Failed to start recording"), backgroundColor: Colors.red),
+          );
+        }
+      }
     }
   }
   
