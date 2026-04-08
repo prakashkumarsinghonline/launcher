@@ -11,7 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.2.3
-  record: ^5.0.5
+  record: 5.0.5 # Lock version to prevent Linux build errors on newer platform interface
   permission_handler: ^11.3.1
   path_provider: ^2.1.2
 

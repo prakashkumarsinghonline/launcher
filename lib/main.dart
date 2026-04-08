@@ -100,6 +100,8 @@ class _LauncherScreenState extends State<LauncherScreen> {
   String _fontStyle = 'Courier'; // Courier, Roboto, Arial, Times New Roman, monospace, sans-serif, serif, cursive
   String _iconShape = 'Original'; // Original, Circle, Squircle
   String _notificationStyle = 'Toast'; // Toast, Minimal, Card
+  String? _swipeLeftApp;
+  String? _swipeRightApp;
 
   String _timeString = "";
   String _dateString = "";
@@ -321,6 +323,8 @@ class _LauncherScreenState extends State<LauncherScreen> {
       _fontStyle = prefs.getString('fontStyle') ?? 'Courier';
       _iconShape = prefs.getString('iconShape') ?? 'Original';
       _notificationStyle = prefs.getString('notificationStyle') ?? 'Toast';
+      _swipeLeftApp = prefs.getString('swipeLeftApp');
+      _swipeRightApp = prefs.getString('swipeRightApp');
       
       String? renamedJson = prefs.getString('renamedApps');
       if (renamedJson != null) {
@@ -341,6 +345,8 @@ class _LauncherScreenState extends State<LauncherScreen> {
     await prefs.setString('fontStyle', _fontStyle);
     await prefs.setString('iconShape', _iconShape);
     await prefs.setString('notificationStyle', _notificationStyle);
+    if (_swipeLeftApp != null) await prefs.setString('swipeLeftApp', _swipeLeftApp!);
+    if (_swipeRightApp != null) await prefs.setString('swipeRightApp', _swipeRightApp!);
     await prefs.setString('renamedApps', json.encode(_renamedApps));
   }
 
@@ -521,6 +527,30 @@ class _LauncherScreenState extends State<LauncherScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   _showRenameDialog(app);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.swipe_left, color: Colors.purpleAccent),
+                title: const Text("SET AS SWIPE LEFT SHORTCUT", style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold)),
+                onTap: () {
+                  setState(() {
+                    _swipeLeftApp = app.packageName;
+                    _savePreferences();
+                  });
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Swipe Left Shortcut Set!")));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.swipe_right, color: Colors.orangeAccent),
+                title: const Text("SET AS SWIPE RIGHT SHORTCUT", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                onTap: () {
+                  setState(() {
+                    _swipeRightApp = app.packageName;
+                    _savePreferences();
+                  });
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Swipe Right Shortcut Set!")));
                 },
               ),
             ],
@@ -831,6 +861,21 @@ class _LauncherScreenState extends State<LauncherScreen> {
           : _wallpapers[_wallpaperIndex],
       body: GestureDetector(
         onLongPress: _showCustomizationMenu,
+        onHorizontalDragEnd: (details) {
+          if (details.primaryVelocity != null) {
+            if (details.primaryVelocity! > 0) {
+              // Swiped Right
+              if (_swipeRightApp != null) {
+                _launchApp(_swipeRightApp!);
+              }
+            } else if (details.primaryVelocity! < 0) {
+              // Swiped Left
+              if (_swipeLeftApp != null) {
+                _launchApp(_swipeLeftApp!);
+              }
+            }
+          }
+        },
         behavior: HitTestBehavior.translucent,
         child: SafeArea(
           child: Column(
